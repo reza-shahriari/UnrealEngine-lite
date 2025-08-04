@@ -1,0 +1,137 @@
+<?xml version='1.0' ?>
+<BuildGraph xmlns="http://www.epicgames.com/BuildGraph" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.epicgames.com/BuildGraph ../Schema.xsd" >
+
+	<!-- Project Options -->
+	<Option Name="ProjectFile" DefaultValue="_Unknown_" Restrict=".+" Description="The projects to cook"/>
+	<Option Name="ProjectName" DefaultValue="_Unknown_" Restrict=".+" Description="The projects to cook"/>
+	<Option Name="ProjectDir" DefaultValue="_Unknown_" Restrict=".+" Description="The projects to cook"/>
+	<Option Name="EditorTarget" DefaultValue="$(ProjectName)Editor" Description="Compile name of the editor target"/>
+
+	<!-- Note we can not make the default='', because the default is used for some validation. -->
+	<Error Message="No project file specified" If="'$(ProjectFile)' == '_Unknown_'"/>
+	<Error Message="No project name specified" If="'$(ProjectName)' == '_Unknown_'"/>
+	<Error Message="No project dir specified" If="'$(ProjectDir)' == '_Unknown_'"/>
+
+	<!-- Platform Options -->
+	<Option Name="TargetPlatform" DefaultValue="Windows" Restrict=".+" Description="The platform to cook"/>
+
+	<!-- Agent Options -->
+	<Option Name="AgentType" DefaultValue="" Description="The platform to cook"/>
+	<Property Name="AgentType" Value="IncrementalCompareAgent_$(ProjectName)_$(TargetPlatform)" If="'$(AgentType)' == ''"/>
+
+	<Option Name="WithUBA" Restrict="true|false" DefaultValue="true" Description="Whether to use UBA compile or not"/>
+	<Property Name="UBACompileArgs" Value=""/>
+	<Property Name="UBACompileArgs" Value="-UBA -ActionStallReportTime=300 -UBALinkRemote" If="$(WithUBA)"/>
+	
+	<!-- Agent=IncrementalCompareAgent variables -->
+	<Option Name="CookProcessCount" DefaultValue="" Description="Number of processes to use during cooking, default is ini-driven."/>
+	<Option Name="MPCookCoreSubscription" DefaultValue="" Description="Over or Under subscription factor for CPU cores to use during cooking, default is ini-driven."/>
+	<Option Name="WithNullCook" Restrict="true|false" DefaultValue="false" Description="Whether to do a null cook or not"/>
+	<Option Name="NullCookCustomConfig" DefaultValue="" Description="What custom configuration to apply if doing a null cook (see -CustomConfig commandline argument)"/>
+	<Property Name="FullPathProjectDir" Value="$(RootDir)/$(ProjectDir)"/>
+	<Property Name="EditorPlatform" Value="Win64"/>
+	<Property Name="CommonCookArgs" Value="-targetplatform=$(TargetPlatform) -cookcultures=en -unversioned -zenstore -cookincremental -IgnoreBlueprintCookDependencies"/>
+	<Property Name="CommonCookArgs" Value="$(CommonCookArgs) -CookProcessCount=$(CookProcessCount)" If="'$(CookProcessCount)' != ''"/>
+	<Property Name="CommonCookArgs" Value="$(CommonCookArgs) -MPCookCoreSubscription=$(MPCookCoreSubscription)" If="'$(MPCookCoreSubscription)' != ''"/>
+	<Property Name="PlatformCookedDir" Value="$(FullPathProjectDir)/Saved/Cooked/$(TargetPlatform)"/>
+	<Property Name="CompareDirIncremental" Value="$(FullPathProjectDir)/Intermediate/IncrementalCompare/Iter/$(TargetPlatform)"/>
+	<Property Name="CompareDirRecook" Value="$(FullPathProjectDir)/Intermediate/IncrementalCompare/Recook/$(TargetPlatform)"/>
+	<Property Name="NewLine" Value="&#10;"/>
+
+	<Property Name="CompileNodeName" Value="Compile $(EditorPlatform) $(ProjectName)"/>
+	<Property Name="NaturalIncrementalCookNodeName" Value="Natural Incremental Cook $(ProjectName) $(TargetPlatform)"/>
+	<Property Name="StoreIncrementalCookNodeName" Value="Store Incremental Cook $(ProjectName) $(TargetPlatform)"/>
+	<Property Name="PrimingNullIncrementalCookNodeName" Value="Priming Null Incremental Cook $(ProjectName) $(TargetPlatform)"/>
+	<Property Name="NullIncrementalCookNodeName" Value="Null Incremental Cook $(ProjectName) $(TargetPlatform)"/>
+	<Property Name="CleanNullIncrementalCookNodeName" Value="Clean Null Incremental Cook $(ProjectName) $(TargetPlatform)"/>
+	<Property Name="FullCookNodeName" Value="Full Cook $(ProjectName) $(TargetPlatform)"/>
+	<Property Name="StoreFullCookNodeName" Value="Store Full Cook $(ProjectName) $(TargetPlatform)"/>
+	<Property Name="DiffCooksNodeName" Value="Diff Cooks $(ProjectName) $(TargetPlatform)"/>
+
+	<Agent Name="IncrementalCompareAgent" Type="$(AgentType)">
+		<Node Name="$(CompileNodeName)">
+			<!-- Compile. -->
+			<Log Message="$(NewLine)========== IncrementalCompare.xml: Compile =========="/>
+			<Compile Target="ShaderCompileWorker" Platform="$(EditorPlatform)" Project="$(ProjectFile)" Configuration="Development" Arguments="$(UBACompileArgs)"/>
+			<Compile Target="ZenLaunch" Platform="$(EditorPlatform)" Configuration="Development" Arguments="$(UBACompileArgs)"/>
+			<Compile Target="$(EditorTarget)" Platform="$(EditorPlatform)" Project="$(ProjectFile)" Configuration="Development" Arguments="$(UBACompileArgs)"/>
+		</Node>
+		<Node Name="$(NaturalIncrementalCookNodeName)" Requires="$(CompileNodeName)">
+			<!-- Execute the incremental cook (we don't pass -forcerecook). -->
+			<Log Message="$(NewLine)========== IncrementalCompare.xml: Incremental Cook =========="/>
+			<Commandlet Name="Cook" Project="$(ProjectFile)" Arguments="$(CommonCookArgs)"/>
+		</Node>
+		<Node Name="$(StoreIncrementalCookNodeName)" Requires="$(NaturalIncrementalCookNodeName)">
+			<!-- Move all cook artifacts to the compare_incremental dir. -->
+			<Log Message="$(NewLine)========== IncrementalCompare.xml: Move =========="/>
+			<Log Message="Delete Directories=$(CompareDirIncremental)"/>
+			<Delete Directories="$(CompareDirIncremental)"/>
+			<Do If="$(WithNullCook)">
+				<Log Message="Copy From=$(PlatformCookedDir)/*.* To=$(CompareDirIncremental)"/>
+				<Copy From="$(PlatformCookedDir)/*.*" To="$(CompareDirIncremental)" ErrorIfNotFound="true"/>
+			</Do>
+			<Do If="!$(WithNullCook)">
+				<Log Message="Move From=$(PlatformCookedDir)/*.* To=$(CompareDirIncremental)"/>
+				<Move From="$(PlatformCookedDir)/*.*" To="$(CompareDirIncremental)" ErrorIfNotFound="true"/>
+				<Log Message="Delete Directories=$(PlatformCookedDir)"/>
+				<Delete Directories="$(PlatformCookedDir)"/>
+			</Do>
+
+			<!-- Write the files from incremental cook's zenstore out into CompareDirIncremental. -->
+			<Log Message="$(NewLine)========== IncrementalCompare.xml: ZenMirror Incremental Cook =========="/>
+			<Log Message="ZenMirror Project=$(ProjectFile) Platform=$(TargetPlatform) DestinationFileDir=$(CompareDirIncremental)"/>
+			<ZenMirror Project="$(ProjectFile)" Platform="$(TargetPlatform)" DestinationFileDir="$(CompareDirIncremental)"/>
+		</Node>
+		<Property Name="FullCookPrequisiteNodeName" Value="$(StoreIncrementalCookNodeName)"/>
+		<Do If="$(WithNullCook)">
+			<Node Name="$(PrimingNullIncrementalCookNodeName)" Requires="$(StoreIncrementalCookNodeName)">
+				<!-- Execute the null incremental cook. -->
+				<Log Message="$(NewLine)========== IncrementalCompare.xml: Priming Null Incremental Cook =========="/>
+				<Property Name="NullCookArgs" Value="$(CommonCookArgs) -dpcvars=cook.displaymode=2"/>
+				<Property Name="NullCookArgs" Value="$(NullCookArgs) -CustomConfig=$(NullCookCustomConfig)" If="'$(NullCookCustomConfig)' != ''"/>
+				<Commandlet Name="Cook" Project="$(ProjectFile)" Arguments="$(NullCookArgs)"/>
+			</Node>
+			<Node Name="$(NullIncrementalCookNodeName)" Requires="$(PrimingNullIncrementalCookNodeName)">
+				<!-- Execute the null incremental cook. -->
+				<Log Message="$(NewLine)========== IncrementalCompare.xml: Null Incremental Cook =========="/>
+				<Property Name="NullCookArgs" Value="$(CommonCookArgs) -dpcvars=cook.displaymode=2"/>
+				<Property Name="NullCookArgs" Value="$(NullCookArgs) -CustomConfig=$(NullCookCustomConfig)" If="'$(NullCookCustomConfig)' != ''"/>
+				<Commandlet Name="Cook" Project="$(ProjectFile)" Arguments="$(NullCookArgs)"/>
+			</Node>
+			<Node Name="$(CleanNullIncrementalCookNodeName)" Requires="$(NullIncrementalCookNodeName)">
+				<!-- Move all cook artifacts to the compare_incremental dir. -->
+				<Log Message="$(NewLine)========== IncrementalCompare.xml: Clean Null =========="/>
+				<Log Message="Delete Directories=$(PlatformCookedDir)"/>
+				<Delete Directories="$(PlatformCookedDir)"/>
+			</Node>
+			<Property Name="FullCookPrequisiteNodeName" Value="$(CleanNullIncrementalCookNodeName)"/>
+		</Do>
+		<Node Name="$(FullCookNodeName)" Requires="$(FullCookPrequisiteNodeName)">
+			<!-- Execute the forcerecook cook. -->
+			<Log Message="$(NewLine)========== IncrementalCompare.xml: Non-Incremental Cook =========="/>
+			<Commandlet Name="Cook" Project="$(ProjectFile)" Arguments="$(CommonCookArgs) -forcerecook"/>
+		</Node>
+		<Node Name="$(StoreFullCookNodeName)" Requires="$(FullCookNodeName)">
+			<!-- Copy all cook artifacts to the compare_incremental dir. Copy rather than move so they remain
+			     behind for the next instance of this job to use in an incremental cook. -->
+			<Log Message="$(NewLine)========== IncrementalCompare.xml: Copy =========="/>
+			<Log Message="Delete Directories=$(CompareDirRecook)"/>
+			<Delete Directories="$(CompareDirRecook)"/>
+			<Log Message="Copy From=$(PlatformCookedDir)/*.* To=$(CompareDirRecook)"/>
+			<Copy From="$(PlatformCookedDir)/*.*" To="$(CompareDirRecook)" ErrorIfNotFound="true"/>
+
+			<!-- Write the files from forcerecook's zenstore out into CompareDirRecook. -->
+			<Log Message="$(NewLine)========== IncrementalCompare.xml: ZenMirror ForceRecook Cook =========="/>
+			<Log Message="ZenMirror Project=$(ProjectFile) Platform=$(TargetPlatform) DestinationFileDir=$(CompareDirRecook)"/>
+			<ZenMirror Project="$(ProjectFile)" Platform="$(TargetPlatform)" DestinationFileDir="$(CompareDirRecook)"/>
+		</Node>
+		<Node Name="$(DiffCooksNodeName)" Requires="$(StoreFullCookNodeName)">
+			<!-- Compare the incremental cook with the non-incremental cook. -->
+			<Log Message="$(NewLine)========== IncrementalCompare.xml: DiffCook =========="/>
+			<Commandlet Name="DiffCook" Project="$(ProjectFile)" Arguments="-base=$(CompareDirRecook) -comp=$(CompareDirIncremental) -targetplatform=$(TargetPlatform) -addedverbosity=error -removedverbosity=error -modifiedverbosity=warning -hide=modifiedpackages"/>
+		</Node>
+	</Agent>
+
+	<Aggregate Name="IncrementalCompare" Requires="$(DiffCooksNodeName)"/>
+
+</BuildGraph>
